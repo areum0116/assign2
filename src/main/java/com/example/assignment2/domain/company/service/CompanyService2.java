@@ -15,7 +15,6 @@ import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.ResponseEntity;
-import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.client.RestTemplate;
@@ -32,6 +31,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
@@ -48,7 +48,6 @@ public class CompanyService2 {
     private static final String DOWNLOAD_PATH = "C:/Users/arkim/Workspace/assignment2/src/main/resources/static/download/";
     private final CompanyRepository companyRepository;
     private final RestTemplate restTemplate;
-    private final ThreadPoolTaskExecutor threadPoolTaskExecutor;
 
     @Value("${api.fair-trade-commission.base-url}")
     private String fairTradeUrl;
@@ -78,9 +77,10 @@ public class CompanyService2 {
                 throw new RuntimeException("Invalid header");
             }
             String line;
+            List<CompletableFuture<Void>> asyncResultList = new ArrayList<>();
             while ((line = reader.readLine()) != null) {
                 String finalLine = line;
-                CompletableFuture.runAsync(() -> {
+                CompletableFuture<Void> asyncResult = CompletableFuture.runAsync(() -> {
                     String[] fields = finalLine.split(",");
                     if (fields.length <= telSalesNumIdx || fields.length <= companyNameIdx || fields.length <= brnoIdx
                             || fields.length <= jusoIdx || fields.length <= corpYNIdx) {
@@ -107,10 +107,11 @@ public class CompanyService2 {
                     log.error(ex.getMessage());
                     return null;
                 });
+                asyncResultList.add(asyncResult);
             }
-            threadPoolTaskExecutor.shutdown();
-            if (threadPoolTaskExecutor.isRunning()) {
-                throw new RuntimeException("Executor did not terminate");
+            CompletableFuture<Void> everyResult = CompletableFuture.allOf(asyncResultList.toArray(new CompletableFuture[0]));
+            if (everyResult.isCompletedExceptionally()) {
+                throw new RuntimeException("Something went wrong while saving company");
             }
             List<Company> companyList = companyRepository.findAll();
             companyDtoList = companyList.stream().map(CompanyDto::new).collect(Collectors.toList());
