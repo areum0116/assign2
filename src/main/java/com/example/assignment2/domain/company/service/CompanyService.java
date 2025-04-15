@@ -16,6 +16,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.util.UriComponentsBuilder;
@@ -34,6 +35,7 @@ import java.nio.file.StandardOpenOption;
 import java.util.*;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -70,30 +72,52 @@ public class CompanyService {
             String[] headers = header.split(",");
             int telSalesNumIdx = Arrays.asList(headers).indexOf("통신판매번호");
             int companyNameIdx = Arrays.asList(headers).indexOf("상호");
+            int corpYNIdx = Arrays.asList(headers).indexOf("법인여부");
             int brnoIdx = Arrays.asList(headers).indexOf("사업자등록번호");
             int jusoIdx = Arrays.asList(headers).indexOf("사업장소재지");
             if (telSalesNumIdx < 0 || companyNameIdx < 0 || brnoIdx < 0 || jusoIdx < 0) {
                 throw new RuntimeException("Invalid header");
             }
-            reader.lines().forEach(line -> executor.execute(() -> {
-                String[] fields = line.split(",");
-                if (fields.length < telSalesNumIdx || fields.length < companyNameIdx || fields.length < brnoIdx || fields.length < jusoIdx) {
-                    return;
-                }
-                String telSalesNum = fields[telSalesNumIdx].trim();
-                String companyName = fields[companyNameIdx].trim();
-                String brno = fields[brnoIdx].replace("-", "").trim();
-                String juso = fields[jusoIdx].split(" ")[0].concat(fields[jusoIdx].split(" ")[1].concat(fields[jusoIdx].split(" ")[2]));
+            String line;
+            while ((line = reader.readLine()) != null) {
+                String finalLine = line;
+                executor.execute(() -> {
+                    try {
+                        String[] fields = finalLine.split(",");
+                        if (fields.length < telSalesNumIdx || fields.length < companyNameIdx || fields.length < brnoIdx || fields.length < jusoIdx || fields.length < corpYNIdx) {
+                            return;
+                        }
+                        if (fields[corpYNIdx].equals("개인")) {
+                            return;
+                        }
+                        String telSalesNum = fields[telSalesNumIdx].trim();
+                        String companyName = fields[companyNameIdx].trim();
+                        String brno = fields[brnoIdx].replace("-", "").trim();
+                        String[] jusoParts = fields[jusoIdx].split(" ");
+                        if(jusoParts.length < 3) {
+                            return;
+                        }
+                        String juso = jusoParts[0] + jusoParts[1] + jusoParts[2];
 
-                String crno = getCrnoMatchingBrno(brno);
-                String admCd = getAdmCdMatchingJuso(juso);
+                        String crno = getCrnoMatchingBrno(brno);
+                        String admCd = getAdmCdMatchingJuso(juso);
 
-                Company company = new Company(telSalesNum, companyName, brno, crno, admCd);
-                companyRepository.save(company);
-            }));
+                        Company company = new Company(telSalesNum, companyName, brno, crno, admCd);
+                        saveCompanyData(company);
+                    } catch (Exception e) {
+                        log.error("비동기 저장 중 예외 발생", e);
+                    }
+                });
+            }
+            executor.shutdown();
+            boolean isTerminated = executor.awaitTermination(10, TimeUnit.MINUTES);
+            if (!isTerminated) {
+                throw new RuntimeException("Executor did not terminate");
+            }
             List<Company> companyList = companyRepository.findAll();
             companyDtoList = companyList.stream().map(CompanyDto::new).collect(Collectors.toList());
-        } catch (IOException e) {
+        } catch (IOException | InterruptedException e) {
+            log.error(e.getMessage());
             throw new RuntimeException(e);
         }
         return new CompanySaveResponse(200, "Saved Successfully", companyDtoList);
@@ -166,5 +190,10 @@ public class CompanyService {
             return "N/A";
         }
         return response.getResults().getJuso().get(0).getAdmCd();
+    }
+
+    @Transactional
+    public void saveCompanyData(Company company) {
+        companyRepository.save(company);
     }
 }
