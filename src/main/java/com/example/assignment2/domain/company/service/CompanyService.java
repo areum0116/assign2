@@ -65,46 +65,43 @@ public class CompanyService {
         File file = downloadBizComm(request);
         List<Company> companyList = new ArrayList<>();
         List<CompanyDto> companyDtoList = new ArrayList<>();
-        executor.execute(() -> {
-            try (BufferedReader reader = Files.newBufferedReader(file.toPath())) {
-                String header = reader.readLine();
-                if (StringCustomManager.isEmptyString(header)) {
-                    throw new RuntimeException("No header found");
-                }
-                String[] headers = header.split(",");
-                int telSalesNumIdx = Arrays.asList(headers).indexOf("통신판매번호");
-                int companyNameIdx = Arrays.asList(headers).indexOf("상호");
-                int brnoIdx = Arrays.asList(headers).indexOf("사업자등록번호");
-                int jusoIdx = Arrays.asList(headers).indexOf("사업장소재지");
-                if (telSalesNumIdx < 0 || companyNameIdx < 0 || brnoIdx < 0 || jusoIdx < 0) {
-                    throw new RuntimeException("Invalid header");
-                }
-
-                reader.lines().forEach(line -> {
-                    String[] fields = line.split(",");
-                    if (fields.length < telSalesNumIdx || fields.length < companyNameIdx || fields.length < brnoIdx || fields.length < jusoIdx) {
-                        return;
-                    }
-                    String telSalesNum = fields[telSalesNumIdx].trim();
-                    String companyName = fields[companyNameIdx].trim();
-                    String brno = fields[brnoIdx].replace("-", "").trim();
-                    String juso = fields[jusoIdx].split(" ")[0].concat(fields[jusoIdx].split(" ")[1].concat(fields[jusoIdx].split(" ")[2]));
-
-                    String crno = getCrnoMatchingBrno(brno);
-                    String admCd = getAdmCdMatchingJuso(juso);
-
-                    Company company = new Company(telSalesNum, companyName, brno, crno, admCd);
-                    companyList.add(company);
-                });
-                List<Company> companies = saveToDb(companyList);
-                companies.forEach(company -> companyDtoList.add(new CompanyDto(company)));
-            } catch (IOException e) {
-                throw new RuntimeException(e);
+        try (BufferedReader reader = Files.newBufferedReader(file.toPath())) {
+            String header = reader.readLine();
+            if (StringCustomManager.isEmptyString(header)) {
+                throw new RuntimeException("No header found");
             }
-        });
+            String[] headers = header.split(",");
+            int telSalesNumIdx = Arrays.asList(headers).indexOf("통신판매번호");
+            int companyNameIdx = Arrays.asList(headers).indexOf("상호");
+            int brnoIdx = Arrays.asList(headers).indexOf("사업자등록번호");
+            int jusoIdx = Arrays.asList(headers).indexOf("사업장소재지");
+            if (telSalesNumIdx < 0 || companyNameIdx < 0 || brnoIdx < 0 || jusoIdx < 0) {
+                throw new RuntimeException("Invalid header");
+            }
+            reader.lines().forEach(line -> executor.execute(() -> {
+                String[] fields = line.split(",");
+                if (fields.length < telSalesNumIdx || fields.length < companyNameIdx || fields.length < brnoIdx || fields.length < jusoIdx) {
+                    return;
+                }
+                String telSalesNum = fields[telSalesNumIdx].trim();
+                String companyName = fields[companyNameIdx].trim();
+                String brno = fields[brnoIdx].replace("-", "").trim();
+                String juso = fields[jusoIdx].split(" ")[0].concat(fields[jusoIdx].split(" ")[1].concat(fields[jusoIdx].split(" ")[2]));
 
+                String crno = getCrnoMatchingBrno(brno);
+                String admCd = getAdmCdMatchingJuso(juso);
+
+                Company company = new Company(telSalesNum, companyName, brno, crno, admCd);
+                companyList.add(company);
+                List<Company> companies = saveToDb(companyList);
+                companies.forEach(c -> companyDtoList.add(new CompanyDto(c)));
+            }));
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
         return new CompanySaveResponse(200, "Saved Successfully", companyDtoList);
     }
+
 
     public HttpEntity<String> makeStringHttpEntity(String referer) {
         HttpHeaders headers = new HttpHeaders();
@@ -121,8 +118,7 @@ public class CompanyService {
         URI url = null;
         try {
             url = new URI(BASE_URL + "?atchFileUrl=dataopen&atchFileNm=" + encodedFileName);
-        } catch (URISyntaxException ignored) {
-        }
+        } catch (URISyntaxException ignored) {}
         HttpEntity<String> entity = makeStringHttpEntity(REFERER_URL);
         assert url != null;
         ResponseEntity<byte[]> response = restTemplate.exchange(url, HttpMethod.GET, entity, byte[].class);
@@ -143,7 +139,6 @@ public class CompanyService {
             throw new RuntimeException("파일 저장 중 오류: " + e.getMessage());
         }
     }
-
 
     private String getCrnoMatchingBrno(String brno) {
         String url = UriComponentsBuilder.fromUriString(fairTradeUrl)
