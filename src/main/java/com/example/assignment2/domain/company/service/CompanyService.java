@@ -82,8 +82,8 @@ public class CompanyService {
                 threadPoolTaskExecutor.execute(() -> {
                     try {
                         String[] fields = finalLine.split(",");
-                        if (fields.length < telSalesNumIdx || fields.length < companyNameIdx || fields.length < brnoIdx
-                                || fields.length < jusoIdx || fields.length < corpYNIdx) {
+                        if (fields.length <= telSalesNumIdx || fields.length <= companyNameIdx || fields.length <= brnoIdx
+                                || fields.length <= jusoIdx || fields.length <= corpYNIdx) {
                             return;
                         }
                         if (fields[corpYNIdx].equals("개인")) {
@@ -184,7 +184,7 @@ public class CompanyService {
                 .build()
                 .toUriString();
         JusoResponse response = restTemplate.getForEntity(url, JusoResponse.class).getBody();
-        if (response == null || response.getResults().getJuso() == null) {
+        if (response == null || response.getResults().getJuso() == null || response.getResults().getJuso().isEmpty()) {
             return "N/A";
         }
         return response.getResults().getJuso().get(0).getAdmCd();
