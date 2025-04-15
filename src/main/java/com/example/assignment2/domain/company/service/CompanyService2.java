@@ -81,32 +81,31 @@ public class CompanyService2 {
             while ((line = reader.readLine()) != null) {
                 String finalLine = line;
                 CompletableFuture.runAsync(() -> {
-                    try {
-                        String[] fields = finalLine.split(",");
-                        if (fields.length <= telSalesNumIdx || fields.length <= companyNameIdx || fields.length <= brnoIdx
-                                || fields.length <= jusoIdx || fields.length <= corpYNIdx) {
-                            return;
-                        }
-                        if (fields[corpYNIdx].equals("개인")) {
-                            return;
-                        }
-                        String telSalesNum = fields[telSalesNumIdx].trim();
-                        String companyName = fields[companyNameIdx].trim();
-                        String brno = fields[brnoIdx].replace("-", "").trim();
-                        String[] jusoParts = fields[jusoIdx].split(" ");
-                        if(jusoParts.length < 3) {
-                            return;
-                        }
-                        String juso = jusoParts[0] + jusoParts[1] + jusoParts[2];
-
-                        String crno = getCrnoMatchingBrno(brno);
-                        String admCd = getAdmCdMatchingJuso(juso);
-
-                        Company company = new Company(telSalesNum, companyName, brno, crno, admCd);
-                        saveCompanyData(company);
-                    } catch (Exception e) {
-                        log.error("비동기 저장 중 예외 발생 ", e);
+                    String[] fields = finalLine.split(",");
+                    if (fields.length <= telSalesNumIdx || fields.length <= companyNameIdx || fields.length <= brnoIdx
+                            || fields.length <= jusoIdx || fields.length <= corpYNIdx) {
+                        return;
                     }
+                    if (fields[corpYNIdx].equals("개인")) {
+                        return;
+                    }
+                    String telSalesNum = fields[telSalesNumIdx].trim();
+                    String companyName = fields[companyNameIdx].trim();
+                    String brno = fields[brnoIdx].replace("-", "").trim();
+                    String[] jusoParts = fields[jusoIdx].split(" ");
+                    if (jusoParts.length < 3) {
+                        return;
+                    }
+                    String juso = jusoParts[0] + jusoParts[1] + jusoParts[2];
+
+                    String crno = getCrnoMatchingBrno(brno);
+                    String admCd = getAdmCdMatchingJuso(juso);
+
+                    Company company = new Company(telSalesNum, companyName, brno, crno, admCd);
+                    saveCompanyData(company);
+                }).exceptionally(ex -> {
+                    log.error(ex.getMessage());
+                    return null;
                 });
             }
             threadPoolTaskExecutor.shutdown();
