@@ -31,12 +31,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
-import java.util.Objects;
+import java.util.*;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -63,8 +61,7 @@ public class CompanyService {
     public CompanySaveResponse saveCompany(CompanySaveRequest request) {
         ExecutorService executor = Executors.newFixedThreadPool(10);
         File file = downloadBizComm(request);
-        List<Company> companyList = new ArrayList<>();
-        List<CompanyDto> companyDtoList = new ArrayList<>();
+        List<CompanyDto> companyDtoList;
         try (BufferedReader reader = Files.newBufferedReader(file.toPath())) {
             String header = reader.readLine();
             if (StringCustomManager.isEmptyString(header)) {
@@ -92,16 +89,15 @@ public class CompanyService {
                 String admCd = getAdmCdMatchingJuso(juso);
 
                 Company company = new Company(telSalesNum, companyName, brno, crno, admCd);
-                companyList.add(company);
-                List<Company> companies = saveToDb(companyList);
-                companies.forEach(c -> companyDtoList.add(new CompanyDto(c)));
+                companyRepository.save(company);
             }));
+            List<Company> companyList = companyRepository.findAll();
+            companyDtoList = companyList.stream().map(CompanyDto::new).collect(Collectors.toList());
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
         return new CompanySaveResponse(200, "Saved Successfully", companyDtoList);
     }
-
 
     public HttpEntity<String> makeStringHttpEntity(String referer) {
         HttpHeaders headers = new HttpHeaders();
@@ -170,10 +166,5 @@ public class CompanyService {
             return "N/A";
         }
         return response.getResults().getJuso().get(0).getAdmCd();
-    }
-
-    @Transactional
-    public List<Company> saveToDb(List<Company> companyList) {
-        return companyRepository.saveAll(companyList);
     }
 }
