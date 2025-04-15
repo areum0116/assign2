@@ -1,6 +1,7 @@
 package com.example.assignment2.domain.company.service;
 
 import com.example.assignment2.domain.company.dto.request.CompanySaveRequest;
+import com.example.assignment2.domain.company.dto.response.CompanyDto;
 import com.example.assignment2.domain.company.dto.response.CompanySaveResponse;
 import com.example.assignment2.domain.company.dto.response.CrnoResponse;
 import com.example.assignment2.domain.company.dto.response.JusoResponse;
@@ -34,10 +35,8 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -60,52 +59,51 @@ public class CompanyService {
 
     private final CompanyRepository companyRepository;
 
+    @Transactional
     public CompanySaveResponse saveCompany(CompanySaveRequest request) {
         ExecutorService executor = Executors.newFixedThreadPool(10);
+        File file = downloadBizComm(request);
+        List<Company> companyList = new ArrayList<>();
+        List<CompanyDto> companyDtoList = new ArrayList<>();
         executor.submit(() -> {
-            downloadBizComm(request).thenCompose(file -> {
-                List<CompletableFuture<Company>> companyFutureList = new ArrayList<>();
-                try (BufferedReader reader = Files.newBufferedReader(file.toPath())) {
-                    String header = reader.readLine();
-                    if(StringCustomManager.isEmptyString(header)) {
-                        throw new RuntimeException("No header found");
-                    }
-                    String[] headers = header.split(",");
-                    int telSalesNumIdx = Arrays.asList(headers).indexOf("통신판매번호");
-                    int companyNameIdx = Arrays.asList(headers).indexOf("상호");
-                    int brnoIdx = Arrays.asList(headers).indexOf("사업자등록번호");
-                    int jusoIdx = Arrays.asList(headers).indexOf("사업장소재지");
-                    if(telSalesNumIdx < 0 || companyNameIdx < 0 || brnoIdx < 0 || jusoIdx < 0) {
-                        throw new RuntimeException("Invalid header");
-                    }
-
-                    reader.lines().forEach(line -> {
-                        String[] fields = line.split(",");
-                        if(fields.length < telSalesNumIdx || fields.length < companyNameIdx || fields.length < brnoIdx || fields.length < jusoIdx) {
-                            return;
-                        }
-                        String telSalesNum = fields[telSalesNumIdx].trim();
-                        String companyName = fields[companyNameIdx].trim();
-                        String brno = fields[brnoIdx].replace("-", "").trim();
-                        String juso = fields[jusoIdx].split(" ")[0].concat(fields[jusoIdx].split(" ")[1].concat(fields[jusoIdx].split(" ")[2]));
-
-                        CompletableFuture<String> crnoFuture = getCrnoMatchingBrno(brno);
-                        CompletableFuture<String> admCdFuture = getAdmCdMatchingJuso(juso);
-
-                        CompletableFuture<Company> companyFuture = crnoFuture.thenCombine(admCdFuture,
-                                (crno, admCd) -> new Company(telSalesNum, companyName, brno, crno, admCd)
-                        );
-                        companyFutureList.add(companyFuture);
-                    });
-                } catch (IOException e) {
-                    throw new RuntimeException(e);
+            try (BufferedReader reader = Files.newBufferedReader(file.toPath())) {
+                String header = reader.readLine();
+                if (StringCustomManager.isEmptyString(header)) {
+                    throw new RuntimeException("No header found");
                 }
-                return CompletableFuture.allOf(companyFutureList.toArray(new CompletableFuture[0]))
-                        .thenApply(Void -> companyFutureList.stream().map(CompletableFuture::join).collect(Collectors.toList()))
-                        .thenApply(this::saveToDb);
-            });
+                String[] headers = header.split(",");
+                int telSalesNumIdx = Arrays.asList(headers).indexOf("통신판매번호");
+                int companyNameIdx = Arrays.asList(headers).indexOf("상호");
+                int brnoIdx = Arrays.asList(headers).indexOf("사업자등록번호");
+                int jusoIdx = Arrays.asList(headers).indexOf("사업장소재지");
+                if (telSalesNumIdx < 0 || companyNameIdx < 0 || brnoIdx < 0 || jusoIdx < 0) {
+                    throw new RuntimeException("Invalid header");
+                }
+
+                reader.lines().forEach(line -> {
+                    String[] fields = line.split(",");
+                    if (fields.length < telSalesNumIdx || fields.length < companyNameIdx || fields.length < brnoIdx || fields.length < jusoIdx) {
+                        return;
+                    }
+                    String telSalesNum = fields[telSalesNumIdx].trim();
+                    String companyName = fields[companyNameIdx].trim();
+                    String brno = fields[brnoIdx].replace("-", "").trim();
+                    String juso = fields[jusoIdx].split(" ")[0].concat(fields[jusoIdx].split(" ")[1].concat(fields[jusoIdx].split(" ")[2]));
+
+                    String crno = getCrnoMatchingBrno(brno);
+                    String admCd = getAdmCdMatchingJuso(juso);
+
+                    Company company = new Company(telSalesNum, companyName, brno, admCd, crno);
+                    companyList.add(company);
+                });
+                List<Company> companies = saveToDb(companyList);
+                companies.forEach(company -> companyDtoList.add(new CompanyDto(company)));
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
         });
-        return new CompanySaveResponse(200, "Saved Successfully");
+        
+        return new CompanySaveResponse(200, "Saved Successfully", companyDtoList);
     }
 
     public HttpEntity<String> makeStringHttpEntity(String referer) {
@@ -118,85 +116,69 @@ public class CompanyService {
         return new HttpEntity<>(headers);
     }
 
-    private CompletableFuture<File> downloadBizComm(CompanySaveRequest requestDto) {
-        return CompletableFuture.supplyAsync(
-                () -> {
-                    String encodedFileName = URLEncoder.encode("통신판매사업자_" + requestDto.getCity() + "_" + requestDto.getDistrict() + ".csv", StandardCharsets.UTF_8);
-                    URI url = null;
-                    try {
-                        url = new URI(BASE_URL + "?atchFileUrl=dataopen&atchFileNm=" + encodedFileName);
-                    } catch (URISyntaxException ignored) {
-                    }
-                    HttpEntity<String> entity = makeStringHttpEntity(REFERER_URL);
-                    assert url != null;
-                    ResponseEntity<byte[]> response = restTemplate.exchange(url, HttpMethod.GET, entity, byte[].class);
-                    if (!response.getStatusCode().is2xxSuccessful()) {
-                        throw new RuntimeException("파일 다운로드 실패 : " + response.getStatusCode());
-                    }
-                    String fileName = "company_" + requestDto.getCity() + "_" + requestDto.getDistrict() + ".csv";
-                    Path path = Paths.get(DOWNLOAD_PATH, fileName);
-                    try {
-                        if (!Files.exists(path)) {
-                            Files.createDirectories(path.getParent());
-                        }
+    private File downloadBizComm(CompanySaveRequest requestDto) {
+        String encodedFileName = URLEncoder.encode("통신판매사업자_" + requestDto.getCity() + "_" + requestDto.getDistrict() + ".csv", StandardCharsets.UTF_8);
+        URI url = null;
+        try {
+            url = new URI(BASE_URL + "?atchFileUrl=dataopen&atchFileNm=" + encodedFileName);
+        } catch (URISyntaxException ignored) {
+        }
+        HttpEntity<String> entity = makeStringHttpEntity(REFERER_URL);
+        assert url != null;
+        ResponseEntity<byte[]> response = restTemplate.exchange(url, HttpMethod.GET, entity, byte[].class);
+        if (!response.getStatusCode().is2xxSuccessful()) {
+            throw new RuntimeException("파일 다운로드 실패 : " + response.getStatusCode());
+        }
+        String fileName = "company_" + requestDto.getCity() + "_" + requestDto.getDistrict() + ".csv";
+        Path path = Paths.get(DOWNLOAD_PATH, fileName);
+        try {
+            if (!Files.exists(path)) {
+                Files.createDirectories(path.getParent());
+            }
 
-                        String encodedFileData = new String(Objects.requireNonNull(response.getBody()), "euc-kr");
-                        Files.writeString(path, encodedFileData, StandardOpenOption.CREATE);
-                        return path.toFile();
-                    } catch (Exception e) {
-                        throw new RuntimeException("파일 저장 중 오류: " + e.getMessage());
-                    }
-                }
-        ).exceptionally(ex -> {
-            log.error(ex.getMessage());
+            String encodedFileData = new String(Objects.requireNonNull(response.getBody()), "euc-kr");
+            Files.writeString(path, encodedFileData, StandardOpenOption.CREATE);
+            return path.toFile();
+        } catch (Exception e) {
+            throw new RuntimeException("파일 저장 중 오류: " + e.getMessage());
+        }
+    }
+
+
+    private String getCrnoMatchingBrno(String brno) {
+        String url = UriComponentsBuilder.fromUriString(fairTradeUrl)
+                .queryParam("serviceKey", fairTradeKey)
+                .queryParam("pageNo", 1)
+                .queryParam("numOfRows", 1)
+                .queryParam("resultType", "json")
+                .queryParam("brno", brno)
+                .build()
+                .toUriString();
+        CrnoResponse response = restTemplate.getForEntity(url, CrnoResponse.class).getBody();
+        if (response == null || response.getItems().isEmpty()) {
             return null;
-        });
+        }
+        return response.getItems().get(0).getCrno();
     }
 
-    private CompletableFuture<String> getCrnoMatchingBrno(String brno) {
-        return CompletableFuture.supplyAsync(
-                () -> {
-                    String url = UriComponentsBuilder.fromUriString(fairTradeUrl)
-                            .queryParam("serviceKey", fairTradeKey)
-                            .queryParam("pageNo", 1)
-                            .queryParam("numOfRows", 1)
-                            .queryParam("resultType", "json")
-                            .queryParam("brno", brno)
-                            .build()
-                            .toUriString();
-                    CrnoResponse response = restTemplate.getForEntity(url, CrnoResponse.class).getBody();
-                    if (response == null || response.getItems().isEmpty()) {
-                        return null;
-                    }
-                    return response.getItems().get(0).getCrno();
-                }
-        );
-    }
-
-    private CompletableFuture<String> getAdmCdMatchingJuso(String juso) {
-        return CompletableFuture.supplyAsync(
-                () -> {
-                    String url = UriComponentsBuilder.fromUriString(jusoUrl)
-                            .queryParam("confmKey", jusoKey)
-                            .queryParam("currentPage", 1)
-                            .queryParam("countPerPage", 1)
-                            .queryParam("keyword", juso)
-                            .queryParam("resultType", "json")
-                            .build()
-                            .toUriString();
-                    JusoResponse response = restTemplate.getForEntity(url, JusoResponse.class).getBody();
-                    if (response == null || response.getResults().getJuso() == null) {
-                        return "N/A";
-                    }
-                    return response.getResults().getJuso().get(0).getAdmCd();
-                }
-        );
+    private String getAdmCdMatchingJuso(String juso) {
+        String url = UriComponentsBuilder.fromUriString(jusoUrl)
+                .queryParam("confmKey", jusoKey)
+                .queryParam("currentPage", 1)
+                .queryParam("countPerPage", 1)
+                .queryParam("keyword", juso)
+                .queryParam("resultType", "json")
+                .build()
+                .toUriString();
+        JusoResponse response = restTemplate.getForEntity(url, JusoResponse.class).getBody();
+        if (response == null || response.getResults().getJuso() == null) {
+            return "N/A";
+        }
+        return response.getResults().getJuso().get(0).getAdmCd();
     }
 
     @Transactional
-    public CompletableFuture<List<Company>> saveToDb(List<Company> companyList) {
-        return CompletableFuture.supplyAsync(
-                () -> companyRepository.saveAll(companyList)
-        );
+    public List<Company> saveToDb(List<Company> companyList) {
+        return companyRepository.saveAll(companyList);
     }
 }
