@@ -15,6 +15,7 @@ import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.ResponseEntity;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.client.RestTemplate;
@@ -47,7 +48,9 @@ public class CompanyService {
     private static final String REFERER_URL = "https://www.ftc.go.kr/www/selectBizCommOpenList.do?key=255";
     private static final String BASE_URL = "https://www.ftc.go.kr/www/downloadBizComm.do";
     private static final String DOWNLOAD_PATH = "C:/Users/arkim/Workspace/assignment2/src/main/resources/static/download/";
+    private final CompanyRepository companyRepository;
     private final RestTemplate restTemplate;
+    private final ThreadPoolTaskExecutor threadPoolTaskExecutor;
 
     @Value("${api.fair-trade-commission.base-url}")
     private String fairTradeUrl;
@@ -58,11 +61,8 @@ public class CompanyService {
     @Value("${api.juso.key}")
     private String jusoKey;
 
-    private final CompanyRepository companyRepository;
-
     @Transactional
     public CompanySaveResponse saveCompany(CompanySaveRequest request) {
-        ExecutorService executor = Executors.newFixedThreadPool(10);
         File file = downloadBizComm(request);
         List<CompanyDto> companyDtoList;
         try (BufferedReader reader = Files.newBufferedReader(file.toPath())) {
@@ -82,10 +82,11 @@ public class CompanyService {
             String line;
             while ((line = reader.readLine()) != null) {
                 String finalLine = line;
-                executor.execute(() -> {
+                threadPoolTaskExecutor.execute(() -> {
                     try {
                         String[] fields = finalLine.split(",");
-                        if (fields.length < telSalesNumIdx || fields.length < companyNameIdx || fields.length < brnoIdx || fields.length < jusoIdx || fields.length < corpYNIdx) {
+                        if (fields.length < telSalesNumIdx || fields.length < companyNameIdx || fields.length < brnoIdx
+                                || fields.length < jusoIdx || fields.length < corpYNIdx) {
                             return;
                         }
                         if (fields[corpYNIdx].equals("개인")) {
@@ -110,14 +111,13 @@ public class CompanyService {
                     }
                 });
             }
-            executor.shutdown();
-            boolean isTerminated = executor.awaitTermination(10, TimeUnit.MINUTES);
-            if (!isTerminated) {
+            threadPoolTaskExecutor.shutdown();
+            if (threadPoolTaskExecutor.isRunning()) {
                 throw new RuntimeException("Executor did not terminate");
             }
             List<Company> companyList = companyRepository.findAll();
             companyDtoList = companyList.stream().map(CompanyDto::new).collect(Collectors.toList());
-        } catch (IOException | InterruptedException e) {
+        } catch (IOException e) {
             log.error(e.getMessage());
             throw new RuntimeException(e);
         }
