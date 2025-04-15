@@ -65,7 +65,7 @@ public class CompanyService {
         File file = downloadBizComm(request);
         List<Company> companyList = new ArrayList<>();
         List<CompanyDto> companyDtoList = new ArrayList<>();
-        executor.submit(() -> {
+        executor.execute(() -> {
             try (BufferedReader reader = Files.newBufferedReader(file.toPath())) {
                 String header = reader.readLine();
                 if (StringCustomManager.isEmptyString(header)) {
@@ -93,7 +93,7 @@ public class CompanyService {
                     String crno = getCrnoMatchingBrno(brno);
                     String admCd = getAdmCdMatchingJuso(juso);
 
-                    Company company = new Company(telSalesNum, companyName, brno, admCd, crno);
+                    Company company = new Company(telSalesNum, companyName, brno, crno, admCd);
                     companyList.add(company);
                 });
                 List<Company> companies = saveToDb(companyList);
@@ -102,7 +102,7 @@ public class CompanyService {
                 throw new RuntimeException(e);
             }
         });
-        
+
         return new CompanySaveResponse(200, "Saved Successfully", companyDtoList);
     }
 
